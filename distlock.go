@@ -83,7 +83,7 @@ func NewLockManager(client redis.UniversalClient, logger log.Logger, opts ...Opt
 
 // Lock set lock and returned unlock function. If acquiring the lock fails, return ErrLockHeld.
 // The expiration time of the key is automatically updated every half of LockManager's leaseTTL.
-// Because time.Timer is used, the unlock method must be executed, otherwise it will cause an overflow.
+// Because time.Ticker is used, the unlock method must be executed, otherwise it will cause an overflow.
 func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err error) {
 	lockKey := l.prefix + key
 	lockValue := l.idGenerator()
@@ -99,8 +99,13 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ticker.C:
+			case _, ok := <-ticker.C:
+				// the ticker is closed
+				if !ok {
+					return
+				}
 				if !l.renew(ctx, lockKey, lockValue) {
+					// the lock has been released
 					return
 				}
 			case <-ctx.Done():

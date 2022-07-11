@@ -1,3 +1,4 @@
+// Package core_locks provides lock implementation using redis.
 package core_locks
 
 import (

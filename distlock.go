@@ -32,7 +32,7 @@ end
 var ErrLockHeld = fmt.Errorf("lock held")
 
 // LockManager is based on the redis database and implements a distributed lock
-// that automatically updates the expiration time.
+// that automatically renews the lease in a timely manner.
 type LockManager struct {
 	prefix      string
 	client      redis.UniversalClient
@@ -44,6 +44,7 @@ type LockManager struct {
 // Option is the option to change LockManager behavior.
 type Option func(*LockManager)
 
+// WithPrefix change key prefix.
 func WithPrefix(prefix string) func(c *LockManager) {
 	return func(c *LockManager) {
 		c.prefix = prefix
@@ -60,12 +61,14 @@ func WithLeaseTTL(leaseTTL time.Duration) func(c *LockManager) {
 	}
 }
 
+// WithIDGenerator change the function that generates the lock check value.
 func WithIDGenerator(f func() int) func(c *LockManager) {
 	return func(c *LockManager) {
 		c.idGenerator = f
 	}
 }
 
+// NewLockManager to new LockManager.
 func NewLockManager(client redis.UniversalClient, logger log.Logger, opts ...Option) *LockManager {
 	m := &LockManager{
 		prefix:      "lock:",

@@ -19,7 +19,7 @@ func TestDistLock(t *testing.T) {
 	ctx := context.Background()
 	addrs := strings.Split(os.Getenv("REDIS_ADDR"), ",")
 	client := redis.NewUniversalClient(&redis.UniversalOptions{Addrs: addrs})
-	l := NewLockManager(client, log.NewNopLogger(), LockManagerConfig{LeaseTTL: 1 * time.Second})
+	l := NewLockManager(client, log.NewNopLogger(), WithLeaseTTL(time.Second))
 	unlock, err := l.Lock(ctx, "foo")
 	if err != nil {
 		t.Fatal(err)

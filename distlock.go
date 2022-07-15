@@ -31,6 +31,8 @@ end
 
 var ErrLockHeld = fmt.Errorf("lock held")
 
+// LockManager is based on the redis database and implements a distributed lock
+// that automatically renews the lease in a timely manner.
 type LockManager struct {
 	prefix      string
 	client      redis.UniversalClient
@@ -39,31 +41,52 @@ type LockManager struct {
 	idGenerator func() int
 }
 
-type LockManagerConfig struct {
-	Prefix      string
-	LeaseTTL    time.Duration
-	IDGenerator func() int
+// Option is the option to change LockManager behavior.
+type Option func(*LockManager)
+
+// WithPrefix change key prefix.
+func WithPrefix(prefix string) func(c *LockManager) {
+	return func(c *LockManager) {
+		c.prefix = prefix
+	}
 }
 
-func NewLockManager(client redis.UniversalClient, logger log.Logger, config LockManagerConfig) *LockManager {
-	if config.Prefix == "" {
-		config.Prefix = "lock:"
+// WithLeaseTTL change LockManager's leaseTTL and can't be zero value.
+func WithLeaseTTL(leaseTTL time.Duration) func(c *LockManager) {
+	return func(c *LockManager) {
+		if leaseTTL == 0 {
+			return
+		}
+		c.leaseTTL = leaseTTL
 	}
-	if config.LeaseTTL == 0 {
-		config.LeaseTTL = time.Second * 2
+}
+
+// WithIDGenerator change the function that generates the lock check value.
+func WithIDGenerator(f func() int) func(c *LockManager) {
+	return func(c *LockManager) {
+		c.idGenerator = f
 	}
-	if config.IDGenerator == nil {
-		config.IDGenerator = rand.Int
-	}
-	return &LockManager{
-		prefix:      config.Prefix,
+}
+
+// NewLockManager to new LockManager.
+func NewLockManager(client redis.UniversalClient, logger log.Logger, opts ...Option) *LockManager {
+	m := &LockManager{
+		prefix:      "lock:",
+		leaseTTL:    time.Second * 2,
+		idGenerator: rand.Int,
 		client:      client,
 		logger:      logger,
-		leaseTTL:    config.LeaseTTL,
-		idGenerator: config.IDGenerator,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+
+	return m
 }
 
+// Lock set lock and returned unlock function. If acquiring the lock fails, return ErrLockHeld.
+// The expiration time of the key is automatically updated every half of LockManager's leaseTTL.
+// Because time.Ticker is used, the unlock method must be executed, otherwise it will cause an overflow.
 func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err error) {
 	lockKey := l.prefix + key
 	lockValue := l.idGenerator()
@@ -76,9 +99,20 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 	}
 	var ticker = time.NewTicker(l.leaseTTL / 2)
 	go func() {
-		for range ticker.C {
-			if !l.renew(ctx, lockKey, lockValue) {
-				break
+		defer ticker.Stop()
+		for {
+			select {
+			case _, ok := <-ticker.C:
+				// the ticker is closed
+				if !ok {
+					return
+				}
+				if !l.renew(ctx, lockKey, lockValue) {
+					// the lock has been released
+					return
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()

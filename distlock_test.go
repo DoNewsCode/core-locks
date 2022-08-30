@@ -25,13 +25,13 @@ func TestDistLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = l.Lock(ctx, "foo")
-	if err == nil {
-		t.Fatal("expected error")
+	if err != ErrLockHeld {
+		t.Fatalf("lock error want: %v, got: %v", ErrLockHeld, err)
 	}
 	time.Sleep(time.Second * 2) // lock should be renewed
 	_, err = l.Lock(ctx, "foo")
-	if err == nil {
-		t.Fatal("expected error")
+	if err != ErrLockHeld {
+		t.Fatalf("lock error want: %v, got: %v", ErrLockHeld, err)
 	}
 	unlock()
 	_, err = l.Lock(ctx, "foo")

@@ -97,20 +97,19 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 	if !succeed {
 		return nil, ErrLockHeld
 	}
+	stop := make(chan struct{}, 1)
 	var ticker = time.NewTicker(l.leaseTTL / 2)
 	go func() {
 		defer ticker.Stop()
 		for {
 			select {
-			case _, ok := <-ticker.C:
-				// the ticker is closed
-				if !ok {
-					return
-				}
+			case <-ticker.C:
 				if !l.renew(ctx, lockKey, lockValue) {
 					// the lock has been released
 					return
 				}
+			case <-stop:
+				return
 			case <-ctx.Done():
 				return
 			}
@@ -118,6 +117,7 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 	}()
 	return func() {
 		ticker.Stop()
+		stop <- struct{}{}
 
 		err := unlockLuaScript.Run(ctx, l.client, []string{lockKey}, lockValue).Err()
 		if err != nil {

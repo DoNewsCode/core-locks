@@ -12,22 +12,22 @@ import (
 )
 
 // Lua script to unlock a redis lock
-const unlockLuaScript = `
+var unlockLuaScript = redis.NewScript(`
 if redis.call("get", KEYS[1]) == ARGV[1] then
 	return redis.call("del", KEYS[1])
 else
 	return 0
 end
-`
+`)
 
 // Lua script to renew redis lock
-const renewLuaScript = `
+var renewLuaScript = redis.NewScript(`
 if redis.call("get", KEYS[1]) == ARGV[1] then
 	return redis.call("pexpire", KEYS[1], ARGV[2])
 else
 	return 0
 end
-`
+`)
 
 var ErrLockHeld = fmt.Errorf("lock held")
 
@@ -97,20 +97,19 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 	if !succeed {
 		return nil, ErrLockHeld
 	}
+	stop := make(chan struct{}, 1)
 	var ticker = time.NewTicker(l.leaseTTL / 2)
 	go func() {
 		defer ticker.Stop()
 		for {
 			select {
-			case _, ok := <-ticker.C:
-				// the ticker is closed
-				if !ok {
-					return
-				}
+			case <-ticker.C:
 				if !l.renew(ctx, lockKey, lockValue) {
 					// the lock has been released
 					return
 				}
+			case <-stop:
+				return
 			case <-ctx.Done():
 				return
 			}
@@ -118,21 +117,20 @@ func (l *LockManager) Lock(ctx context.Context, key string) (unlock func(), err 
 	}()
 	return func() {
 		ticker.Stop()
-		err := l.client.Eval(ctx, unlockLuaScript, []string{lockKey}, lockValue).Err()
+		stop <- struct{}{}
+
+		err := unlockLuaScript.Run(ctx, l.client, []string{lockKey}, lockValue).Err()
 		if err != nil {
 			l.logger.Log("msg", "unlock failed", "key", lockKey, "value", lockValue, "error", err)
 		}
 	}, nil
 }
 
-func (l *LockManager) renew(ctx context.Context, lockKey string, lockValue interface{}) (renewed bool) {
-	r, err := l.client.Eval(ctx, renewLuaScript, []string{lockKey}, lockValue, int(l.leaseTTL.Milliseconds())).Result()
+func (l *LockManager) renew(ctx context.Context, lockKey string, lockValue interface{}) bool {
+	r, err := renewLuaScript.Run(ctx, l.client, []string{lockKey}, lockValue, int(l.leaseTTL.Milliseconds())).Bool()
 	if err != nil {
 		l.logger.Log("msg", "renew failed", "key", lockKey, "value", lockValue, "error", err)
 		return false
 	}
-	if r == 0 {
-		return false
-	}
-	return true
+	return r
 }
